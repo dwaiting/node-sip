@@ -43,60 +43,54 @@ function send (address, port, tid, message, state, interval, max, timeout, callb
 }
 
 
-function createInviteServerTransaction (invite, callback) {
-  var transaction = new InviteServerTransaction (invite.getBranch (), invite.toString ());
+function createInviteServerTransaction(invite, callback) {
+  var transaction = new InviteServerTransaction (invite.getBranch(), invite.toString());
 
-  db.hmset (transaction.tid, 'state', transaction.state, 'type', transaction.type, 'saddress', invite.getSourceAddress (), 'sport', invite.getSourcePort (), (err, reply) => {
-    if (err) { return callback ('Error setting transaction state in DB: ' + err); }
+  db.hmset(transaction.tid, 'state', transaction.state, 'type', transaction.type, 'saddress', invite.getSourceAddress(), 'sport', invite.getSourcePort(), (err, reply) => {
+    if (err) { return callback('Error setting transaction state in DB: ' + err); }
 
     console.log(transaction.tid + ' - New IST - Current state: ' + transaction.state);
 
-    db.expire (transaction.tid, 300, (err, reply) => {
+    db.expire(transaction.tid, options.istExpire, (err, reply) => {
+      if (err) { return callback('Error setting transaction expiry in DB: ' + err); }
+
+      tl.emit ('user', invite);
+      callback (null);
+    });
+  });
+}
+
+
+function createInviteClientTransaction(invite, callback) {
+  var transaction = new InviteClientTransaction(invite.getBranch(), invite.toString());
+
+  db.hmset (transaction.tid, 'state', transaction.state, 'type', transaction.type, (err, reply) => {
+    if (err) { return callback('Error setting transaction state in DB: ' + err); }
+
+    console.log('ICT - DB Write: ' + transaction.tid + ' - ' + transaction.state + ': ' + reply);
+
+    db.expire(transaction.tid, options.ictExpire, (err, reply) => {
       if (err) { return callback ('Error setting transaction expiry in DB: ' + err); }
 
-      invite.buildTrying ((err, trying) => {
-        if (err) { return callback (err); }
-
-        tl.emit ('transport', trying.nextHop ().address, trying.nextHop ().port, trying.toString ());
+      send(invite.nextHop.address, invite.nextHop.port, transaction.tid, transaction.message, 'calling', options.t1, null, options.t1 * 64, (err) => {
+        if (err) { return callback(err); }
         callback (null);
       });
     });
   });
 }
 
-
-function createInviteClientTransaction (invite, callback) {
-  var transaction = new InviteClientTransaction (invite.getBranch (), invite.toString ());
-
-  db.hmset (transaction.tid, 'state', transaction.state, 'type', transaction.type, (err, reply) => {
-    if (err) { return callback ('Error setting transaction state in DB: ' + err); }
-
-    console.log('ICT - DB Write: ' + transaction.tid + ' - ' + transaction.state + ': ' + reply);
-
-    db.expire (transaction.tid, 300, (err, reply) => {
-      if (err) { return callback ('Error setting transaction expiry in DB: ' + err); }
-
-      send (invite.nextHop ().address, invite.nextHop ().port, transaction.tid, transaction.message, 'calling', options.t1, null, options.t1 * 64, (err) => {
-        if (err) { return callback (err); }
-      });
-
-      callback (null);
-    });
-  });
-}
-
 function createNonInviteServerTransaction (request, callback) {
-  var transaction = new NonInviteServerTransaction (request.getBranch (), request.getMethod (), request.toString ());
+  var transaction = new NonInviteServerTransaction (request.getBranch(), request.getMethod(), request.toString());
 
-  console.log(transaction.tid + ' - New NIST: ' + request.getMethod ());
+  console.log(transaction.tid + ' - New NIST: ' + request.getMethod());
 
-  db.hmset (transaction.tid, 'state', transaction.state, 'type', transaction.type, 'saddress', request.getSourceAddress (), 'sport', request.getSourcePort (), (err, reply) => {
+  db.hmset (transaction.tid, 'state', transaction.state, 'type', transaction.type, 'saddress', request.getSourceAddress(), 'sport', request.getSourcePort(), (err, reply) => {
     if (err) { return callback ('Error setting transaction state in DB: ' + err); }
 
-    console.log('NIST - DB Write: ' + transaction.tid + ' - ' + transaction.state + ': ' + reply);
-
-    db.expire (transaction.tid, 60, (err, reply) => {
+    db.expire (transaction.tid, options.nistExpire, (err, reply) => {
       if (err) { return callback ('Error setting transaction expiry in DB: ' + err); }
+      tl.emit ('user', request);
       callback (null);
     });
   });
@@ -104,19 +98,17 @@ function createNonInviteServerTransaction (request, callback) {
 
 
 function createNonInviteClientTransaction (request, callback) {
-  var transaction = new NonInviteClientTransaction (request.getBranch (), request.getMethod (), request.toString ());
+  var transaction = new NonInviteClientTransaction (request.getBranch(), request.getMethod(), request.toString());
 
-  console.log(transaction.tid + ' - New NICT - ' + request.getMethod ());
+  console.log(transaction.tid + ' - New NICT - ' + request.getMethod());
 
   db.hmset (transaction.tid, 'state', transaction.state, 'type', transaction.type, (err, reply) => {
     if (err) { return callback ('Error setting transaction state in DB: ' + err); }
 
-    console.log('NICT - DB Write: ' + transaction.tid + ' - ' + transaction.state + ': ' + reply);
-
-    db.expire (transaction.tid, 60, (err, reply) => {
+    db.expire (transaction.tid, options.nictExpire, (err, reply) => {
       if (err) { return callback ('Error setting transaction expiry in DB: ' + err); }
 
-      send (request.nextHop ().address, request.nextHop ().port, transaction.tid, transaction.message, 'trying', options.t1, options.t2, options.t1 * 64, (err) => {
+      send (request.nextHop.address, request.nextHop.port, transaction.tid, transaction.message, 'trying', options.t1, options.t2, options.t1 * 64, (err) => {
         if (err) { return callback (err); }
       });
 
@@ -133,25 +125,25 @@ function processInviteClientRequest (tid, state, type, request, callback) {
 
 function processInviteClientResponse (tid, state, type, response, callback) {
 
-  var code = response.getCode ();
+  var code = response.getCode();
 
   if (type != 'ict') { return callback ('Wrong transaction type for ' + code + '. Expected: ict; Received: ' + type); }
 
-  console.log('Invite client current state: ' + state + ' - Processing: ' + code);
+  console.log(tid + ' - ICT current state: ' + state + ' - Processing: ' + code);
 
-  if (state == 'calling') {
+  if (state === 'calling') {
     if (code >= 100 && code < 200) {
-      db.hset (tid, 'state', 'proceeding', (err, reply) => {
+      db.hset(tid, 'state', 'proceeding', (err, reply) => {
         if (err) { return callback('Database error: ' + err); }
-        console.log ('DB Write: ' + tid + ' - proceeding : ' + reply);
-        tl.emit ('user', response);
+        console.log(tid + ' - proceeding : ' + reply);
+        tl.emit('user', response);
       });
     }
 
     if (code >= 200 && code <  300) {
-      db.del (tid, (err, reply) => {
+      db.del(tid, (err, reply) => {
         if (err) { return callback('Database error: ' + err); }
-        console.log ('DB Write: ' + tid + ' - terminated : ' + reply);
+        console.log(tid + ' - terminated : ' + reply);
         tl.emit ('user', response);
       });
     }
@@ -159,46 +151,46 @@ function processInviteClientResponse (tid, state, type, response, callback) {
     if (code >= 300 && code <  700) {
       db.hset (tid, 'state', 'completed', (err, reply) => {
         if (err) { return callback('Database error: ' + err); }
-        console.log ('DB Write: ' + tid + ' - completed : ' + reply);
-        tl.emit ('user', response);
+        console.log(tid + ' - completed : ' + reply);
+        tl.emit('user', response);
       });
     }
   }
 
-  if (state == 'proceeding') {
+  if (state === 'proceeding') {
     if (code >= 100 && code <  200) {
-      tl.emit ('user', response);
+      tl.emit('user', response);
     }
 
     if (code >= 200 && code <  300) {
-      db.del (tid, (err, reply) => {
+      db.del(tid, (err, reply) => {
         if (err) { return callback('Database error: ' + err); }
-        console.log ('DB Write: ' + tid + ' - terminated : ' + reply);
-        tl.emit ('user', response);
+        console.log(tid + ' - terminated : ' + reply);
+        tl.emit('user', response);
       });
     }
 
     if (code >= 300 && code <  700) {
-      db.hset (tid, 'state', 'completed', (err, reply) => {
+      db.hset(tid, 'state', 'completed', (err, reply) => {
         if (err) { return callback('Database error: ' + err); }
-        console.log ('DB Write: ' + tid + ' - completed : ' + reply);
+        console.log(tid + ' - completed : ' + reply);
 
         response.buildAck ((err, ack) => {
-          tl.emit ('transport', ack.nextHop ().address, ack.nextHop ().port, ack.toString ());
+          tl.emit ('transport', ack.nextHop.address, ack.nextHop.port, ack.toString());
 
             if (options.transport == 'udp') {
               setTimeout (() => {
-                db.del (tid, (err, reply) => {
+                db.del(tid, (err, reply) => {
                   if (err) { return callback('Database error: ' + err); }
-                  console.log ('DB Write: ' + tid + ' - terminated : ' + reply);
+                  console.log (tid + ' - timed out - terminated : ' + reply);
                   tl.emit ('user', response);
                 });
               }, options.timer_d);
             } else {
-              db.del (tid, (err, reply) => {
+              db.del(tid, (err, reply) => {
                 if (err) { return callback('Database error: ' + err); }
-                console.log ('DB Write: ' + tid + ' - terminated : ' + reply);
-                tl.emit ('user', response);
+                console.log(tid + ' - terminated : ' + reply);
+                tl.emit('user', response);
               });
             }
         });
@@ -208,66 +200,66 @@ function processInviteClientResponse (tid, state, type, response, callback) {
 
   if (state == 'completed') {
     if (code >= 300 && code <  700) {
-      response.buildAck ((err, ack) => {
-        tl.emit ('transport', ack.nextHop ().address, ack.nextHop ().port, ack.toString ());
+      response.buildAck((err, ack) => {
+        tl.emit('transport', ack.nextHop.address, ack.nextHop.port, ack.toString ());
       });
     }
   }
 }
 
 
-function processNonInviteClientRequest (tid, state, type, request, callback) {
-  return callback ('TU sending same request twice');
+function processNonInviteClientRequest(tid, state, type, request, callback) {
+  return callback('TU sending same request twice');
 }
 
-function processNonInviteClientResponse (tid, state, type, response, callback) {
+function processNonInviteClientResponse(tid, state, type, response, callback) {
 
-  var code = response.getCode ();
+  var code = response.getCode();
 
-  if (type != 'nict') { return callback ('Wrong transaction type for ' + code + '. Expected: nict; Received: ' + type); }
+  if (type !== 'nict') { return callback('Wrong transaction type for ' + code + '. Expected: nict; Received: ' + type); }
 
-  console.log (tid + ' - NICT - ' + response.getMethod () + ' - Current state: ' + state + ' - Processing ' + code);
+  console.log(tid + ' - NICT - ' + response.getMethod() + ' - Current state: ' + state + ' - Processing ' + code);
 
-  if (state == 'trying') {
-    if (code >= 100 && code <  200) {
-      db.hset (tid, 'state', 'proceeding', (err, reply) => {
+  if (state === 'trying') {
+    if (code >= 100 && code < 200) {
+      db.hset(tid, 'state', 'proceeding', (err, reply) => {
         if (err) { return callback('Database error: ' + err); }
-        console.log ('DB Write: ' + tid + ' - proceeding : ' + reply);
-        tl.emit ('user', response);
+        console.log(tid + ' - proceeding : ' + reply);
+        tl.emit('user', response);
       });
     }
 
-    if (code >= 200 && code <  700) {
-      db.hset (tid, 'state', 'completed', (err, reply) => {
+    if (code >= 200 && code < 700) {
+      db.hset(tid, 'state', 'completed', (err, reply) => {
         if (err) { return callback('Database error: ' + err); }
-        console.log (tid + ' - New state: completed - DB Reply: ' + reply);
-        tl.emit ('user', response);
+        console.log(tid + ' - New state: completed - DB Reply: ' + reply);
+        tl.emit('user', response);
 
-        setTimeout (() => {
-          db.del (tid, (err, reply) => {
+        setTimeout(() => {
+          db.del(tid, (err, reply) => {
             if (err) { return callback('Database error: ' + err); }
-            console.log ('DB Write: ' + tid + ' - terminated : ' + reply);
+            console.log(tid + ' - terminated : ' + reply);
           });
         }, options.timer_k);
       });
     }
   }
 
-  if (state == 'proceeding') {
-    if (code >= 100 && code <  200) {
+  if (state === 'proceeding') {
+    if (code >= 100 && code < 200) {
       tl.emit ('user', response);
     }
 
-    if (code >= 200 && code <  700) {
-      db.hset (tid, 'state', 'completed', (err, reply) => {
+    if (code >= 200 && code < 700) {
+      db.hset(tid, 'state', 'completed', (err, reply) => {
         if (err) { return callback('Database error: ' + err); }
-        console.log ('DB Write: ' + tid + ' - completed : ' + reply);
-        tl.emit ('user', response);
+        console.log('DB Write: ' + tid + ' - completed : ' + reply);
+        tl.emit('user', response);
 
-        setTimeout (() => {
-          db.del (tid, (err, reply) => {
+        setTimeout(() => {
+          db.del(tid, (err, reply) => {
             if (err) { return callback('Database error: ' + err); }
-            console.log ('DB Write: ' + tid + ' - terminated : ' + reply);
+            console.log(tid + ' - terminated : ' + reply);
           });
         }, options.timer_k);
       });
@@ -276,183 +268,185 @@ function processNonInviteClientResponse (tid, state, type, response, callback) {
 }
 
 
-function processInviteServerRequest (tid, state, type, saddress, sport, request, callback) {
+function processInviteServerRequest(tid, state, type, saddress, sport, request, callback) {
   // this is a retransmission
-  console.log (tid + ' - ' + request.getMethod () + ' - Current state: ' + state + ' - Processing retransmission');
+  console.log(tid + ' - IST - ' + request.getMethod() + ' - Current state: ' + state + ' - Processing retransmission');
 
-  if (type != 'ist') { return callback ('Wrong transaction type for ' + request.getMethod () + '. Expected: ist; Received: ' + type); }
+  if (type !== 'ist') { return callback ('Wrong transaction type for ' + request.getMethod () + '. Expected: ist; Received: ' + type); }
 
-  if (state == 'proceeding') {
-    if (request.isInvite ()) {
-      request.buildTrying ((err, trying) => {
-        if (err) { return callback (err); }
-        tl.emit ('transport', trying.nextHop ().address, trying.nextHop ().port, trying.toString ());
+  if (state === 'proceeding') {
+    if(request.isInvite()) {
+      db.hget(tid, 'response', (err, response) => {
+        if (err) { return callback('Database error: ' + err); }
+        if (response) { tl.emit ('transport', saddress, sport, response); }
       });
-      // send response
     }
   }
 
-  if (state == 'completed') {
-    if (request.isInvite ()) {
-      // send response
+  if (state === 'completed') {
+    if (request.isInvite()) {
+      db.hget (tid, 'response', (err, response) => {
+        if (err) { return callback('Database error: ' + err); }
+        if (response) { tl.emit('transport', saddress, sport, response); }
+      });
     }
 
-    if (request.isAck ()) {
-      if (state == 'completed') {
-        db.hset (tid, 'state', 'confirmed', (err, reply) => {
+    if (request.isAck()) {
+      if (state === 'completed') {
+        db.hset(tid, 'state', 'confirmed', (err, reply) => {
           if (err) { return callback('Database error: ' + err); }
-          console.log ('DB Write: ' + tid + ' - confirmed : ' + reply);
-          tl.emit ('user', response);
+          console.log(tid + ' - IST - ACK - confirmed : ' + reply);
+          tl.emit('user', request);
 
-          setTimeout (() => {
-            db.del (tid, (err, reply) => {
+          setTimeout(() => {
+            db.del(tid, (err, reply) => {
               if (err) { return callback('Database error: ' + err); }
-              console.log ('DB Write: ' + tid + ' - terminated : ' + reply);
+              console.log(tid + ' - IST timed out - terminated : ' + reply);
             });
           }, options.timer_i);
         });
       }
     }
   }
+
+  return callback(null);
 }
 
-function processInviteServerResponse (tid, state, type, saddress, sport, response, callback) {
+function processInviteServerResponse(tid, state, type, saddress, sport, response, callback) {
 
-  var code = response.getCode ();
+  var code = response.getCode();
 
-  if (type != 'ist') { return callback ('Wrong transaction type for ' + code + '. Expected: ist; Received: ' + type); }
+  if (type != 'ist') { return callback('Wrong transaction type for ' + code + '. Expected: ist; Received: ' + type); }
 
-  console.log('Invite server current state: ' + state + ' Processing: ' + code);
+  console.log(tid + ' - IST - current state: ' + state + ' Processing: ' + code);
 
-  if (state == 'proceeding') {
+  if (state === 'proceeding') {
 
     // save response in case we need to send it again
-    db.hset (tid, 'response', response.toString (), (err, reply) => {
+    db.hset(tid, 'response', response.toString(), (err, reply) => {
       if (err) { return callback('Database error: ' + err); }
     });
 
-    if (code >= 100 && code <  200) {
-      tl.emit ('transport', saddress, sport, response.toString ());
-      return callback (null);
+    if (code >= 100 && code < 200) {
+      tl.emit('transport', saddress, sport, response.toString());
     }
 
-    if (code >= 200 && code <  300) {
-      db.del (tid, (err, reply) => {
+    if (code >= 200 && code < 300) {
+      db.del(tid, (err, reply) => {
         if (err) { return callback('Database error: ' + err); }
-        console.log ('DB Write: ' + tid + ' - terminated : ' + reply);
-        tl.emit ('transport', saddress, sport, response.toString ());
-        return callback (null);
+        console.log(tid + ' - terminated : ' + reply);
+        tl.emit('transport', saddress, sport, response.toString());
       });
     }
 
-    if (code >= 300 && code <  700) {
-      db.hset (tid, 'state', 'completed', (err, reply) => {
+    if (code >= 300 && code < 700) {
+      db.hset(tid, 'state', 'completed', (err, reply) => {
         if (err) { return callback('Database error: ' + err); }
-        console.log ('DB Write: ' + tid + ' - completed : ' + reply);
+        console.log(tid + ' - completed : ' + reply);
 
-        send (saddress, sport, response.toString (), 'completed', options.t1, options.t2, options.t1 * 64, (err) => {
+        send(saddress, sport, response.toString(), 'completed', options.t1, options.t2, options.t1 * 64, (err) => {
           if (err) { return callback ('Error sending response: ' + err); }
 
-          setTimeout (() => {
-            db.del (tid, (err, reply) => {
+          setTimeout(() => {
+            db.del(tid, (err, reply) => {
               if (err) { return callback('Database error: ' + err); }
-              console.log ('DB Write: ' + tid + ' - terminated : ' + reply);
+              console.log(tid + ' - timed out - terminated : ' + reply);
             });
           }, options.t1 * 64);
-
-          return callback (null);
         })
       });
     }
   }
+
+  return callback(null);
 }
 
 
-function processNonInviteServerRequest (tid, state, type, saddress, sport, request, callback) {
+function processNonInviteServerRequest(tid, state, type, saddress, sport, request, callback) {
   // this is a retransmission
 
-  console.log (tid + ' - NIST - ' + request.getMethod () + ' - Current state: ' + state + ' - Processing retransmission');
+  console.log (tid + ' - NIST - ' + request.getMethod() + ' - Current state: ' + state + ' - Processing retransmission');
 
-  if (type != 'nist') { return callback ('Wrong transaction type for ' + request.getMethod () + '. Expected: nist; Received: ' + type); }
+  if (type !== 'nist') { return callback ('Wrong transaction type for ' + request.getMethod () + '. Expected: nist; Received: ' + type); }
 
-  if (state == 'proceeding') {
-    db.hget (tid, 'response', (err, response) => {
+  if (state === 'proceeding') {
+    db.hget(tid, 'response', (err, response) => {
       if (err) { return callback('Database error: ' + err); }
-      tl.emit ('transport', saddress, sport, response.toString ());
-      return callback (null);
+      if (response) { tl.emit('transport', saddress, sport, response); }
     });
   }
 
-  if (state == 'completed') {
-    db.hget (tid, 'response', (err, response) => {
+  if (state === 'completed') {
+    db.hget(tid, 'response', (err, response) => {
       if (err) { return callback('Database error: ' + err); }
-      tl.emit ('transport', saddress, sport, response.toString ());
-      return callback (null);
+      if (response) { tl.emit('transport', saddress, sport, response); }
     });
   }
+
+  return callback (null);
 }
 
 
-function processNonInviteServerResponse (tid, state, type, saddress, sport, response, callback) {
+function processNonInviteServerResponse(tid, state, type, saddress, sport, response, callback) {
 
-  var code = response.getCode ();
+  var code = response.getCode();
 
   console.log(tid + ' - NIST - ' + response.getMethod () + ' - Current state: ' + state + ' - Processing: ' + code);
 
-  if (type != 'nist') { return callback ('Wrong transaction type for ' + code + '. Expected: nist; Received: ' + type); }
+  if (type != 'nist') { return callback('Wrong transaction type for ' + code + '. Expected: nist; Received: ' + type); }
 
-  if (state == 'trying') {
+  if (state === 'trying') {
 
     // save response in case we need to send it again
-    db.hset (tid, 'response', response.toString (), (err, reply) => {
+    db.hset(tid, 'response', response.toString (), (err, reply) => {
       if (err) { return callback('Database error: ' + err); }
     });
 
-    if (code >= 100 && code <  200) {
-      db.hset (tid, 'state', 'proceeding', (err, reply) => {
+    if (code >= 100 && code < 200) {
+      db.hset(tid, 'state', 'proceeding', (err, reply) => {
         if (err) { return callback('Database error: ' + err); }
-        console.log (tid + ' - New state: proceeding');
-        tl.emit ('transport', saddress, sport, response.toString ());
+        console.log(tid + ' - New state: proceeding');
+        tl.emit('transport', saddress, sport, response.toString ());
       });
     }
 
-    if (code >= 200 && code <  700) {
-      db.hset (tid, 'state', 'completed', (err, reply) => {
+    if (code >= 200 && code < 700) {
+      db.hset(tid, 'state', 'completed', (err, reply) => {
         if (err) { return callback('Database error: ' + err); }
         console.log (tid + ' - New state: completed');
-        tl.emit ('transport', saddress, sport, response.toString ());
+        tl.emit('transport', saddress, sport, response.toString ());
 
-        setTimeout (() => {
-          db.del (tid, (err, reply) => {
+        setTimeout(() => {
+          db.del(tid, (err, reply) => {
             if (err) { return callback('Database error: ' + err); }
-            console.log (tid + ' - New state: terminated');
+            console.log(tid + ' - New state: terminated');
           });
         }, options.t1 * 64);
       });
     }
   }
 
-  if (state == 'proceeding') {
+  if (state === 'proceeding') {
 
     // save response in case we need to send it again
-    db.hset (tid, 'response', response.toString (), (err, reply) => {
+    db.hset(tid, 'response', response.toString(), (err, reply) => {
       if (err) { return callback('Database error: ' + err); }
     });
 
-    if (code >= 100 && code <  200) {
-      tl.emit ('transport', saddress, sport, response.toString ());
+    if (code >= 100 && code < 200) {
+      tl.emit('transport', saddress, sport, response.toString());
     }
 
-    if (code >= 200 && code <  700) {
-      db.hset (tid, 'state', 'completed', (err, reply) => {
+    if (code >= 200 && code < 700) {
+      db.hset(tid, 'state', 'completed', (err, reply) => {
         if (err) { return callback('Database error: ' + err); }
-        console.log (tid + ' - New state: completed');
-        tl.emit ('transport', saddress, sport, response.toString ());
+        console.log(tid + ' - New state: completed');
+        tl.emit('transport', saddress, sport, response.toString());
 
-        setTimeout (() => {
-          db.del (tid, (err, reply) => {
+        setTimeout(() => {
+          db.del(tid, (err, reply) => {
             if (err) { return callback('Database error: ' + err); }
-            console.log (tid + ' - New state: terminated');
+            console.log (tid + ' - timed out - New state: terminated');
           });
         }, options.t1 * 64);
       });
@@ -463,127 +457,104 @@ function processNonInviteServerResponse (tid, state, type, saddress, sport, resp
 
 function fromTransport (message, callback) {
 
-  var transaction, tid = tidHash (message.getBranch (), message.getMethod ());
+  var transaction, tid = tidHash (message.getBranch(), message.getMethod());
 
-  if (message.isRequest ()) {
+  if (message.isRequest()) {
 
-    db.hmget (tid, 'state', 'type', 'saddress', 'sport', (err, replies) => {
-      var state = replies [0];
-      var type = replies [1];
-      var saddress = replies [2];
-      var sport = replies [3];
+    db.hmget(tid, 'state', 'type', 'saddress', 'sport', (err, replies) => {
+      var state    = replies[0];
+      var type     = replies[1];
+      var saddress = replies[2];
+      var sport    = replies[3];
 
-      if (state == null) {
+      if (state === null) {
         // new server transaction
-        if (message.isInvite ()) {
-          // new Invite Server Transaction
-          createInviteServerTransaction (message, (err) => {
-            if (err) { return callback ('Could not create Invite server transaction: ' + err); }
-            tl.emit ('user', message);
+        if (message.isInvite()) {
+          createInviteServerTransaction(message, (err) => {
+            if (err) { return callback('Could not create Invite server transaction: ' + err); }
           });
-        } else if (message.isAck() ) {
-          // no need to start a new transaction
+        } else if (message.isAck()) {
           tl.emit ('user', message);
         } else {
-          // new Non-Invite Server Transaction
-          createNonInviteServerTransaction (message, (err) => {
-            if (err) { return callback ('Could not create Non-Invite server transaction: ' + err); }
-            tl.emit ('user', message);
+          createNonInviteServerTransaction(message, (err) => {
+            if (err) { return callback('Could not create Non-Invite server transaction: ' + err); }
           });
         }
       } else {
         // existing server transaction
-        if (message.isInvite () || message.isAck ()) {
-          // existing Invite Server Transaction
-          processInviteServerRequest (tid, state, type, saddress, sport, message, (err) => {
-            if (err) { return callback (err); }
+        if (message.isInvite() || message.isAck()) {
+          processInviteServerRequest(tid, state, type, saddress, sport, message, (err) => {
+            if (err) { return callback(err); }
           });
         } else {
-          // existing Non-Invite Server Transaction
-          processNonInviteServerRequest (tid, state, type, saddress, sport, message, (err) => {
+          processNonInviteServerRequest(tid, state, type, saddress, sport, message, (err) => {
             if (err) { return callback (err); }
           });
         }
       }
     });
 
-  } else if (message.isResponse ()) {
+  } else if (message.isResponse()) {
 
-    db.hmget (tid, 'state', 'type', (err, replies) => {
-      var state = replies [0];
-      var type = replies [1];
+    db.hmget(tid, 'state', 'type', (err, replies) => {
+      var state = replies[0];
+      var type  = replies[1];
 
-      if (state == null) {
+      if (state === null) {
         // drop - should never get response we don't recognize
-        return callback ('Cannot find this transaction in DB: ' + tid);
+        return callback('Cannot find this transaction in DB: ' + tid);
       } else {
-        if (message.getMethod () == 'INVITE') {
-          // existing InviteClientTransaction
-          processInviteClientResponse (tid, state, type, message, (err) => {
-            if (err) { return callback (err); }
-          });
+        // existing transaction
+        if (message.getMethod() === 'INVITE') {
+          processInviteClientResponse(tid, state, type, message, callback);
         } else {
-          // existing NonInviteClientTransaction
-          processNonInviteClientResponse (tid, state, type, message, (err) => {
-            if (err) { return callback (err); }
-          });
+          processNonInviteClientResponse (tid, state, type, message, callback);
         }
       }
     });
   }
-  callback (null);
+  callback(null);
 }
 
 
-function fromUser (message, callback) {
+function fromUser(message, callback) {
 
-  var transaction, tid = tidHash (message.getBranch (), message.getMethod ());
+  var tid = tidHash(message.getBranch(), message.getMethod());
 
-  if (message.isRequest ()) {
-    db.hmget (tid, 'state', 'type', (err, replies) => {
+  if (message.isRequest()) {
+    db.hmget(tid, 'state', 'type', (err, replies) => {
       var state = replies [0];
-      var type = replies [1];
+      var type  = replies [1];
 
-      if (state == null) {
+      if (state === null) {
         // new client transaction
-        if (message.isInvite ()) {
-          createInviteClientTransaction (message, (err) => {
-            if (err) { return callback (err); }
-          })
-        } else if (message.isAck ()) {
-          // just send it
-          tl.emit ('transport', message.nextHop ().address, message.nextHop ().port, message.toString ());
+        if (message.isInvite()) {
+          createInviteClientTransaction (message, callback);
+        } else if (message.isAck()) {
+          tl.emit ('transport', message.nextHop.address, message.nextHop.port, message.toString());
         } else {
-          // new NonInviteClientTransaction
-          createNonInviteClientTransaction (message, (err) => {
-            if (err) { return callback (err); }
-          });
+          createNonInviteClientTransaction(message, callback);
         }
       } else {
         // drop - TU shouldn't be sending us the same request twice!
-        return callback ('TU trying to send existing request');
+        return callback('TU trying to send existing request');
       }
     });
-  } else if (message.isResponse ()) {
-    db.hmget (tid, 'state', 'type', 'saddress', 'sport', (err, replies) => {
-      var state = replies [0];
-      var type = replies [1];
-      var saddress = replies [2];
-      var sport = replies [3];
+  } else if(message.isResponse()) {
+    db.hmget(tid, 'state', 'type', 'saddress', 'sport', (err, replies) => {
+      var state    = replies[0];
+      var type     = replies[1];
+      var saddress = replies[2];
+      var sport    = replies[3];
 
-      if (state == null) {
+      if (state === null) {
         // drop - should never get response we don't recognize
-        return callback ('Cannot find associated transaction for this response');
+        return callback('Cannot find associated transaction for this response');
       } else {
-        if (message.isInvite ()) {
-          processInviteServerResponse (tid, state, type, saddress, sport, message, (err) => {
-            if (err) { return callback (err); }
-          });
+        if (message.isInvite()) {
+          processInviteServerResponse(tid, state, type, saddress, sport, message, callback);
         } else {
-          console.log(tid + ' - About to process NIST: ' + message.getMethod ());
-          processNonInviteServerResponse (tid, state, type, saddress, sport, message, (err) => {
-            if (err) { return callback (err); }
-          });
+          processNonInviteServerResponse (tid, state, type, saddress, sport, message, callback);
         }
       }
     });
@@ -591,66 +562,64 @@ function fromUser (message, callback) {
 }
 
 
-function tidHash (branch, method) {
+function tidHash(branch, method) {
   return crypto.createHash('md5').update(branch + method).digest('hex');
 }
 
 class Transaction {
-  constructor (branch, method) {
-    this.tid = tidHash (branch, method);
+  constructor(branch, method) {
+    this.tid = tidHash(branch, method);
     this.state = null;
   }
 }
 
 class InviteClientTransaction extends Transaction {
-  constructor (branch, message) {
-    super (branch, 'INVITE');
+  constructor(branch, message) {
+    super(branch, 'INVITE');
     this.message = message;
-    this.state = 'calling';
-    this.type = 'ict';
+    this.state   = 'calling';
+    this.type    = 'ict';
   }
 }
 
 class NonInviteClientTransaction extends Transaction {
-  constructor (branch, method, message) {
-    super (branch, method);
+  constructor(branch, method, message) {
+    super(branch, method);
     this.message = message;
-    this.state = 'trying';
-    this.type = 'nict';
+    this.state   = 'trying';
+    this.type    = 'nict';
   }
 }
 
 class InviteServerTransaction extends Transaction {
-  constructor (branch, message) {
-    super (branch, 'INVITE');
+  constructor(branch, message) {
+    super(branch, 'INVITE');
     this.message = message;
-    this.state = 'proceeding';
-    this.type = 'ist';
+    this.state   = 'proceeding';
+    this.type    = 'ist';
   }
 }
 
 class NonInviteServerTransaction extends Transaction {
-  constructor (branch, method, message) {
-    super (branch, method);
+  constructor(branch, method, message) {
+    super(branch, method);
     this.message = message;
-    this.state = 'trying';
-    this.type = 'nist';
+    this.state   = 'trying';
+    this.type    = 'nist';
   }
 }
 
 class TransactionLayer extends EventEmitter {
-  fromUser (message, callback) { fromUser (message, callback); }
-  fromTransport (message, callback) { fromTransport (message, callback); }
+  fromUser(message, callback) { fromUser (message, callback); }
+  fromTransport(message, callback) { fromTransport (message, callback); }
 }
 
-module.exports.initTransactionLayer = (options, callback) => {
-
-  tl = new TransactionLayer ();
-  db = redis.createClient (options.db);
+module.exports.initTransactionLayer = (options) => {
+  tl = new TransactionLayer();
+  db = redis.createClient(options.db);
 
   db.on("error", function (err) {
     if (err) { tl.emit ('error', 'DB error: ' + err); }
   });
-
   return tl;
 }

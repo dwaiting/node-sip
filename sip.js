@@ -11,6 +11,7 @@ const RESPONSE = 'RESPONSE';
 const IFACE = 'eth0';
 
 var options = {
+  vip: '96.119.1.134',
   ip4: guessIP4Address (),
   ip6: guessIP6Address (),
   transport: 'udp',
@@ -203,8 +204,9 @@ function parseCSeq (cseq_string, callback) {
 
 
 function parseRequestLine (request_line_string, callback) {
-  const request_line_regex = /^(INVITE|ACK|BYE|CANCEL|OPTIONS|REGISTER|PRACK|SUBSCRIBE|NOTIFY|PUBLISH|INFO|REFER|MESSAGE|UPDATE)\s(.*)\s(SIP\/2.0)$/i;
+  const request_line_regex = /^(INVITE|ACK|BYE|CANCEL|OPTIONS|REGISTER|PRACK|SUBSCRIBE|NOTIFY|PUBLISH|INFO|REFER|MESSAGE|UPDATE)\s(.+)\s(SIP\/2.0)$/i;
   var request_parts = request_line_regex.exec (request_line_string);
+
   if (request_parts) {
     parseUri (request_parts [2], (err, uri) => {
       if (err) { return callback ('Could not parse Request-URI: ' + err); }
@@ -230,7 +232,7 @@ function parseRequestLine (request_line_string, callback) {
 
 
 function parseResponseLine (response_line_string, callback) {
-  const response_line_regex = /^(SIP\/2\.0)\s(\d{3})\s(.*)$/i;
+  const response_line_regex = /^(SIP\/2\.0)\s(\d{3})\s(.+)$/i;
   var response_parts = response_line_regex.exec (response_line_string);
   if (response_parts) {
     var response_line = {
@@ -263,8 +265,8 @@ module.exports.parseMessage = (msg, callback) => {
   var fatal_parse_error = false;
   var message;
 
-  var request_matches = start_line.match (/^(INVITE|ACK|BYE|CANCEL|OPTIONS|REGISTER|PRACK|SUBSCRIBE|NOTIFY|PUBLISH|INFO|REFER|MESSAGE|UPDATE)\s(.*)\sSIP\/2.0$/i);
-  var response_matches = start_line.match (/^SIP\/2\.0\s(\d{3})\s(.*)$/i);
+  var request_matches = start_line.match (/^(INVITE|ACK|BYE|CANCEL|OPTIONS|REGISTER|PRACK|SUBSCRIBE|NOTIFY|PUBLISH|INFO|REFER|MESSAGE|UPDATE)\s(.+)\sSIP\/2.0$/i);
+  var response_matches = start_line.match (/^SIP\/2\.0\s(\d{3})\s(.+)$/i);
 
   if (request_matches) {
     message = new SipRequest (request_matches [1], request_matches [2]);
@@ -366,7 +368,7 @@ module.exports.parseMessage = (msg, callback) => {
 
 
 function createVia (callback) {
-  var via_string = 'SIP/2.0/' + options.transport.toUpperCase()+ ' ' + options.ip4 + ':' + options.port + ';branch=z9hG4bK-' + Math.floor(Math.random() * 1000000);
+  var via_string = 'SIP/2.0/' + options.transport.toUpperCase()+ ' ' + options.vip + ':' + options.port + ';branch=z9hG4bK-' + Math.floor(Math.random() * 1000000);
   parseVia (via_string, (err, via) => {
       if (err) { return callback ('Could not create Via header'); }
       return callback (null, via);
@@ -375,7 +377,7 @@ function createVia (callback) {
 
 
 function createRecordRoute (callback) {
-  var rr_string = 'sip:' + options.ip4 + ':' + options.port + ';lr';
+  var rr_string = 'sip:' + options.vip + ':' + options.port + ';lr';
   parseUri (rr_string, (err, rr) => {
       if (err) { return callback ('Could not create Record-Route header'); }
       return callback (null, rr);
@@ -479,24 +481,39 @@ class SipMessage {
     }
   }
 
+  getSourceAddress () { return this.saddress; }
+
   setSourcePort (port) {
     this.sport = port;
+
+    if (this.type == REQUEST && this.headers['Via'][0].port != port && this.headers['Via'][0].params['rport']) {
+      this.headers['Via'][0].params['rport'] = port.toString ();
+    }
   }
 
-  setDestAddress (address) {
+  getSourcePort () { return this.sport; }
+
+  setDestinationAddress (address) {
     this.daddress = address;
   }
 
-  setDestPort (port) {
+  getDestinationAddress () { return this.daddress; }
+
+  setDestinationPort (port) {
     this.dport = port ? port : 5060;
   }
 
-  getToTag () {}
-  getFromTag () {}
-  getRequestURI () {}
+  getDestinationPort () { return this.dport; }
 
-  getDestAddress () { return this.daddress; }
-  getDestPort () { return this.dport; }
+  setDestination (address, port) {
+    this.daddress = address;
+    this.dport = port ? port : 5060;
+  }
+
+  getBranch (branch = 0) {
+    return (this.headers['Via'][branch].params.branch) ? this.headers['Via'][branch].params.branch : null;
+  }
+
 
   toString () {
     var mstring = (this.type == REQUEST) ? (this['Request-Line'].value + '\r\n') : (this['Response-Line'].value + '\r\n');
@@ -548,6 +565,10 @@ class SipRequest extends SipMessage {
 
   setRequestLine (rline) { this['Request-Line'] = rline; }
 
+  getRequestLine () { return this['Request-Line']; }
+
+  getRequestURI () { return this['Request-Line'].uri.value; }
+
   getMethod () {
     return this['Request-Line'].method;
   }
@@ -566,7 +587,7 @@ class SipRequest extends SipMessage {
   }
 
   removeRoute () {
-    if (this.headers['Route'] && (this.headers['Route'][0].address === options.ip4 || this.headers['Route'][0].address === options.ip6)) {
+    if (this.headers['Route'] && (this.headers['Route'][0].address === options.ip4 || this.headers['Route'][0].address === options.ip6 || this.headers['Route'][0].address == options.vip)) {
         if (!this.headers['Route'][0].port || (this.headers['Route'][0].port == options.port)) {
           this.headers['Route'].splice (0, 1);
         }
@@ -575,7 +596,10 @@ class SipRequest extends SipMessage {
 
   nextHop () {
     var nexthop = {};
-    if (this.headers['Route'] && this.headers['Route'].length > 0) {
+    if (this.daddress) {
+      nexthop.address = this.daddress;
+      nexthop.port = this.dport ? this.dport : 5060;
+    } else if (this.headers['Route'] && this.headers['Route'].length > 0) {
       nexthop.address = this.headers['Route'][0].address;
       nexthop.port = (this.headers['Route'][0].port) ? this.headers['Route'][0].port : 5060;
     } else {
@@ -594,41 +618,43 @@ class SipRequest extends SipMessage {
     }
   }
 
-  buildTrying () {
+  buildTrying (callback) {
     var response = new SipResponse (100, 'Trying');
     response.setTo (this.headers['To']);
     response.setFrom (this.headers['From']);
     response.setCSeq (this.headers['CSeq']);
     response.setCid (this.headers['Call-ID']);
     response.setVia (this.headers['Via']);
-    return response;
+    response.setDestinationAddress (this.getSourceAddress ());
+    response.setDestinationPort (this.getSourcePort ());
+    callback (null, response);
   }
 
-  buildSuccess (code = 200, reason = 'OK') {
-    var response = new SipResponse (code, reason);
+  buildSuccess (callback) {
+    var response = new SipResponse (200, 'OK');
     response.setTo (this.headers['To']);
     response.setFrom (this.headers['From']);
     response.setCSeq (this.headers['CSeq']);
     response.setCid (this.headers['Call-ID']);
     response.setVia (this.headers['Via']);
     response.addToTag ();
-    return response;
+    response.setDestinationAddress (this.saddress);
+    callback (null, response);
   }
 
-  prepare (destination) {
-    this.decMaxForwards ((err) => {
-      if (err) {
-        console.log (err);
-        return ;
-      }
+  buildRequest (callback) {
+    var request = new SipRequest (this.getMethod (), this.getRequestURI ());
+    request.headers = JSON.parse (JSON.stringify (this.headers));
+    request.content = this.content;
 
-      this.prependVia ();
-      this.removeRoute ();
-
-      if (this.isInvite()) { this.prependRecordRoute (); }
+    request.decMaxForwards ((err) => {
+      if (err) { return callback (err); }
+      request.prependVia ();
+      request.removeRoute ();
+      if (request.isInvite()) { request.prependRecordRoute (); }
+      callback (null, request);
     });
   }
-
 }
 
 
@@ -644,7 +670,10 @@ class SipResponse extends SipMessage {
   }
 
   getCode () { return this['Response-Line'].code; }
+  getReason () { return this['Response-Line'].reason; }
   getMethod () { return this.headers['CSeq'].method; }
+
+  isInvite () { return this.getMethod () == 'INVITE'; }
 
   isTrying () { return this.getCode () == 100}
   isProvisional () { return (this.getCode () > 100 && this.getCode () < 200) }
@@ -653,9 +682,9 @@ class SipResponse extends SipMessage {
   isFailure () { return (this.getCode () >= 400 && this.getCode () < 700)}
 
   removeTopVia () {
-    if ((this.headers['Via'][0].address == options.ip4 || this.headers['Via'][0].address == options.ip6) && this.headers['Via'][0].port == options.port) {
+    //if ((this.headers['Via'][0].address == options.vip || this.headers['Via'][0].address == options.ip6) && this.headers['Via'][0].port == options.port) {
       this.headers['Via'].splice (0, 1);
-    }
+    //}
   }
 
   addToTag () {
@@ -663,7 +692,13 @@ class SipResponse extends SipMessage {
   }
 
   nextHop () {
-    var nexthop = {};
+    //var nexthop = {
+    //  address: this.getDestinationAddress (),
+    //  port: this.getDestinationPort ()
+      //port: (this.headers['Via'][0].port) ? this.headers['Via'][0].port : 5060
+    //};
+
+    /*
     if (this.headers['Via'][0].params['received']) {
       nexthop.address = this.headers['Via'][0].params['received'];
       nexthop.port = (this.headers['Via'][0].port) ? this.headers['Via'][0].port : 5060;
@@ -671,10 +706,33 @@ class SipResponse extends SipMessage {
       nexthop.address = this.headers['Via'][0].address;
       nexthop.port = (this.headers['Via'][0].port) ? this.headers['Via'][0].port : 5060;
     }
+    */
+
+    var nexthop = {
+      address: this.headers['Via'][0].address,
+      port: (this.headers['Via'][0].port) ? this.headers['Via'][0].port : 5060
+    }
     return nexthop;
   }
 
-  prepare () {
-    this.removeTopVia ();
+  buildResponse (callback) {
+    var response = new SipResponse (this.getCode (), this.getReason ());
+    response.headers = JSON.parse (JSON.stringify (this.headers));
+    response.content = this.content;
+    response.removeTopVia ();
+    //response.setDestinationAddress (this.getSourceAddress ());
+    //response.setDestinationPort (this.getSourcePort ());
+    callback (null, response);
+  }
+
+  buildAck (callback) {
+    var ack = new SipRequest ('ACK', this.getRequestURI ());
+    ack.setTo (this.headers['To']);
+    ack.setFrom (this.headers['From']);
+    ack.setCSeq (this.headers['CSeq']);
+    ack.headers['CSeq'].method = 'ACK';
+    ack.setCid (this.headers['Call-ID']);
+    ack.setVia (this.headers['Via']);
+    callback (null, ack);
   }
 }

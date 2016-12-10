@@ -11,11 +11,8 @@ const RESPONSE = 'RESPONSE';
 const IFACE = 'eth0';
 
 var options = {
-  vip: '96.119.1.134',
   ip4: guessIP4Address (),
   ip6: guessIP6Address (),
-  transport: 'udp',
-  port: 5060
 }
 
 
@@ -545,12 +542,39 @@ class SipRequest extends SipMessage {
   constructor (method, uri) {
     super ();
     this.type = REQUEST;
+    this.nextHop = {};
 
     parseRequestLine (method + ' ' + uri + ' SIP/2.0', (err, request_line) => {
       if (err) {
         return null;
       }
       this['Request-Line'] = request_line;
+    });
+
+    Object.defineProperty (this.nextHop, 'address', {
+      get: () => {
+        if (this.daddress) {
+          return this.daddress;
+        } else if (this.headers['Route'] && this.headers['Route'].length > 0) {
+          return this.headers['Route'][0].address;
+        } else {
+          return this['Request-Line'].uri.address;
+        }
+      }
+    });
+
+    Object.defineProperty (this.nextHop, 'port', {
+      get: () => {
+        if (this.dport) {
+          return this.dport;
+        } else if (this.headers['Route'] && this.headers['Route'][0] && this.headers['Route'][0].port) {
+          return this.headers['Route'][0].port;
+        } else if (this['Request-Line'].uri.port) {
+          return this['Request-Line'].uri.port;
+        } else {
+          return 5060;
+        }
+      }
     });
   }
 
@@ -594,6 +618,8 @@ class SipRequest extends SipMessage {
     }
   }
 
+
+  /*
   nextHop () {
     var nexthop = {};
     if (this.daddress) {
@@ -608,6 +634,7 @@ class SipRequest extends SipMessage {
     }
     return nexthop;
   }
+  */
 
   decMaxForwards (callback) {
     if (this.headers['Max-Forwards'].value > 0) {
@@ -716,7 +743,7 @@ class SipResponse extends SipMessage {
   }
 
   buildResponse (callback) {
-    var response = new SipResponse (this.getCode (), this.getReason ());
+    var response = new SipResponse (this.getCode(), this.getReason ());
     response.headers = JSON.parse (JSON.stringify (this.headers));
     response.content = this.content;
     response.removeTopVia ();

@@ -1,11 +1,11 @@
 {
-  "name": "sip",
+  "name": "node-sip",
   "version": "1.0.0",
   "description": "Session Initiation Protocol Library",
-  "main": "sip.js",
+  "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "David Waiting",
-  "license": "ISC"
+  "license": "none"
 }
