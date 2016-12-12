@@ -5,15 +5,16 @@
  */
 
 var os = require ('os');
+var options = require ('./options.js')
 
 const REQUEST = 'REQUEST';
 const RESPONSE = 'RESPONSE';
 const IFACE = 'eth0';
 
-var options = {
-  ip4: guessIP4Address (),
-  ip6: guessIP6Address (),
-}
+//var options = {
+//  ip4: guessIP4Address (),
+//  ip6: guessIP6Address (),
+//}
 
 
 function guessIP6Address () {
@@ -553,9 +554,9 @@ class SipRequest extends SipMessage {
 
     Object.defineProperty (this.nextHop, 'address', {
       get: () => {
-        if (this.daddress) {
-          return this.daddress;
-        } else if (this.headers['Route'] && this.headers['Route'].length > 0) {
+        //if (this.daddress) {
+        //  return this.daddress;
+        if (this.headers['Route'] && this.headers['Route'].length > 0) {
           return this.headers['Route'][0].address;
         } else {
           return this['Request-Line'].uri.address;
@@ -565,9 +566,9 @@ class SipRequest extends SipMessage {
 
     Object.defineProperty (this.nextHop, 'port', {
       get: () => {
-        if (this.dport) {
-          return this.dport;
-        } else if (this.headers['Route'] && this.headers['Route'][0] && this.headers['Route'][0].port) {
+        //if (this.dport) {
+        //  return this.dport;
+        if (this.headers['Route'] && this.headers['Route'][0] && this.headers['Route'][0].port) {
           return this.headers['Route'][0].port;
         } else if (this['Request-Line'].uri.port) {
           return this['Request-Line'].uri.port;
@@ -718,7 +719,7 @@ class SipResponse extends SipMessage {
     this.headers['To'].params['tag'] = Math.floor(Math.random() * 1000000);
   }
 
-  nextHop () {
+  //nextHop () {
     //var nexthop = {
     //  address: this.getDestinationAddress (),
     //  port: this.getDestinationPort ()
@@ -735,12 +736,12 @@ class SipResponse extends SipMessage {
     }
     */
 
-    var nexthop = {
-      address: this.headers['Via'][0].address,
-      port: (this.headers['Via'][0].port) ? this.headers['Via'][0].port : 5060
-    }
-    return nexthop;
-  }
+  //  var nexthop = {
+  //    address: this.headers['Via'][0].address,
+  //    port: (this.headers['Via'][0].port) ? this.headers['Via'][0].port : 5060
+  //  }
+  //  return nexthop;
+  //}
 
   buildResponse (callback) {
     var response = new SipResponse (this.getCode(), this.getReason ());
